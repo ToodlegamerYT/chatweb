@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ultimate Chat</title>
+<style>
+  body { margin:0; font-family: Arial; background:#3498db; color:#fff; }
+  #login, #chat, #admin, #pmBox { display:none; padding:20px; }
+  input, button { padding:10px; margin:5px 0; border-radius:5px; border:none; }
+  button { cursor:pointer; }
+  #messages { height:300px; overflow-y:scroll; border:1px solid #fff; padding:10px; background: rgba(255,255,255,0.1);}
+  .message { margin:5px 0; }
+  .timestamp { font-size:0.7em; color:#ddd; }
+  #users { margin-bottom:10px; }
+  .mention { color: yellow; font-weight: bold; }
+  #pmBox { height:150px; overflow-y:scroll; border:1px solid #fff; background: rgba(0,0,0,0.2); margin-bottom:10px; padding:5px; }
+  .reaction { cursor:pointer; margin-left:5px; }
+</style>
+</head>
+<body>
+
+<!-- LOGIN -->
+<div id="login">
+  <h2>Login / Signup</h2>
+  <input type="text" id="username" placeholder="Username"><br>
+  <input type="password" id="password" placeholder="Password"><br>
+  <button onclick="signup()">Sign Up</button>
+  <button onclick="login()">Login</button>
+</div>
+
+<!-- CHAT -->
+<div id="chat">
+  <h2>Chat Room</h2>
+  <div>
+    <input type="text" id="roomName" placeholder="Room name">
+    <button onclick="joinRoom()">Join / Create Room</button>
+  </div>
+  <div id="roomInfo"></div>
+  <div id="users"><b>Active Users:</b></div>
+  <div id="messages"></div>
+  <input type="text" id="msgInput" placeholder="Type a message">
+  <button onclick="sendMessage()">Send</button>
+  <button onclick="logout()">Logout</button>
+  <button onclick="openAdmin()">Admin Panel</button>
+
+  <h3>Private Messages</h3>
+  <input type="text" id="pmRecipient" placeholder="Send to username">
+  <input type="text" id="pmInput" placeholder="Type PM message">
+  <button onclick="sendPM()">Send PM</button>
+  <div id="pmBox"></div>
+</div>
+
+<!-- ADMIN -->
+<div id="admin">
+  <h2>Admin Panel</h2>
+  <div>
+    <input type="text" id="banUser" placeholder="Username to ban">
+    <button onclick="banUser()">Ban</button>
+  </div>
+  <div>
+    <input type="text" id="kickUser" placeholder="Username to kick">
+    <button onclick="kickUser()">Kick</button>
+  </div>
+  <div>
+    <button onclick="deleteRoom()">Delete Current Room</button>
+  </div>
+  <button onclick="closeAdmin()">Close Admin</button>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+
+<script>
+  // Firebase Config
+  const firebaseConfig = {
+    apiKey: "AIzaSyBDYu6t0sed0qJG0fzKYLfHYr8kgTUzCNQ",
+  authDomain: "chatweb-11-6b2ba.firebaseapp.com",
+  projectId: "chatweb-11-6b2ba",
+  storageBucket: "chatweb-11-6b2ba.firebasestorage.app",
+  messagingSenderId: "876004924325",
+  appId: "1:876004924325:web:a5430c7dfc3a7c3b33a64c"
+};
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.database();
+
+  let currentRoom = '';
+  let currentUser = '';
+  let roomUsersRef;
+  const usernameColors = {};
+
+  document.getElementById('login').style.display='block';
+
+  function randomColor() { return '#'+Math.floor(Math.random()*16777215).toString(16); }
+
+  function signup() {
+    const u = document.getElementById('username').value;
+    const p = document.getElementById('password').value;
+    if(!u||!p) return alert("Enter username & password");
+    localStorage.setItem('username', u);
+    localStorage.setItem('password', p);
+    currentUser=u;
+    usernameColors[u]=randomColor();
+    showChat();
+  }
+
+  function login() {
+    const u=document.getElementById('username').value;
+    const p=document.getElementById('password').value;
+    if(localStorage.getItem('username')===u && localStorage.getItem('password')===p){
+      currentUser=u;
+      if(!usernameColors[u]) usernameColors[u]=randomColor();
+      showChat();
+    } else alert("Wrong username/password");
+  }
+
+  function showChat(){
+    document.getElementById('login').style.display='none';
+    document.getElementById('chat').style.display='block';
+    document.getElementById('msgInput').focus();
+  }
+
+  function logout() {
+    if(currentRoom && roomUsersRef) roomUsersRef.child(currentUser).remove();
+    location.reload();
+  }
+
+  // JOIN ROOM
+  function joinRoom(){
+    currentRoom=document.getElementById('roomName').value.trim();
+    if(!currentRoom) return alert("Enter room name");
+
+    db.ref('banned/'+currentUser).get().then(s=>{
+      if(s.exists()) return alert("You are banned!");
+      setupRoom();
+    });
+  }
+
+  function setupRoom(){
+    const roomRef=db.ref('rooms/'+currentRoom);
+    roomRef.child('created').set(Date.now());
+    roomUsersRef=roomRef.child('users');
+    roomUsersRef.child(currentUser).set(true);
+    roomUsersRef.child(currentUser).onDisconnect().remove();
+
+    updateUsersList();
+    loadMessages();
+    loadPMs();
+    document.getElementById('roomInfo').innerText='Room created: '+new Date().toLocaleTimeString();
+  }
+
+  function updateUsersList(){
+    roomUsersRef.on('value', snap=>{
+      const users=Object.keys(snap.val()||{});
+      document.getElementById('users').innerHTML='<b>Active Users:</b> '+users.join(', ');
+    });
+  }
+
+  function loadMessages(){
+    db.ref('rooms/'+currentRoom+'/messages').on('child_added', snap=>{
+      const msg=snap.val();
+      const msgDiv=document.getElementById('messages');
+      let text=msg.text.replace(/@(\w+)/g,'<span class="mention">@$1</span>');
+      const color=usernameColors[msg.user]|| (usernameColors[msg.user]=randomColor());
+      msgDiv.innerHTML+='<div class="message"><b style="color:'+color+'">'+msg.user+'</b>: '+text+
+        ' <span class="timestamp">'+new Date(msg.timestamp).toLocaleTimeString()+'</span>'+
+        ' <span class="reaction" onclick="addReaction(\''+snap.key+'\',\'👍\')">👍</span>'+
+        ' <span class="reaction" onclick="addReaction(\''+snap.key+'\',\'❤️\')">❤️</span></div>';
+      msgDiv.scrollTop=msgDiv.scrollHeight;
+    });
+  }
+
+  function sendMessage(){
+    const text=document.getElementById('msgInput').value;
+    if(!text||!currentRoom) return;
+    db.ref('rooms/'+currentRoom+'/messages').push({user:currentUser,text,timestamp:Date.now()});
+    db.ref('rooms/'+currentRoom+'/lastActive').set(firebase.database.ServerValue.TIMESTAMP);
+    document.getElementById('msgInput').value='';
+  }
+
+  function addReaction(msgId,reaction){
+    const ref=db.ref('rooms/'+currentRoom+'/messages/'+msgId+'/reactions/'+reaction);
+    ref.transaction(current=>current?current+1:1);
+  }
+
+  // PM FUNCTIONS
+  function sendPM(){
+    const recipient=document.getElementById('pmRecipient').value;
+    const text=document.getElementById('pmInput').value;
+    if(!recipient||!text) return;
+    db.ref('rooms/'+currentRoom+'/pm/'+recipient+'_'+currentUser).push({from:currentUser,text,timestamp:Date.now()});
+    document.getElementById('pmInput').value='';
+  }
+
+  function loadPMs(){
+    db.ref('rooms/'+currentRoom+'/pm').on('child_added', snap=>{
+      snap.forEach(pm=>{
+        if(pm.val().from!==currentUser){
+          const pmBox=document.getElementById('pmBox');
+          pmBox.innerHTML+='<div><b>'+pm.val().from+'</b>: '+pm.val().text+
+            ' <span class="timestamp">'+new Date(pm.val().timestamp).toLocaleTimeString()+'</span></div>';
+          pmBox.scrollTop=pmBox.scrollHeight;
+        }
+      });
+    });
+  }
+
+  // ADMIN FUNCTIONS
+  function openAdmin(){document.getElementById('admin').style.display='block';}
+  function closeAdmin(){document.getElementById('admin').style.display='none';}
+  function banUser(){
+    const u=document.getElementById('banUser').value;
+    if(!u) return;
+    db.ref('banned/'+u).set(true);
+    db.ref('rooms/'+currentRoom+'/users/'+u).remove();
+    alert(u+' banned');
+  }
+  function kickUser(){
+    const u=document.getElementById('kickUser').value;
+    if(!u) return;
+    db.ref('rooms/'+currentRoom+'/users/'+u).remove();
+    alert(u+' kicked');
+  }
+  function deleteRoom(){
+    if(!currentRoom) return;
+    db.ref('rooms/'+currentRoom).remove();
+    alert("Room deleted");
+    location.reload();
+  }
+
+  // AUTO DELETE INACTIVE ROOMS
+  setInterval(()=>{
+    db.ref('rooms').get().then(snap=>{
+      const now=Date.now();
+      snap.forEach(room=>{
+        const data=room.val();
+        const lastActive=data.lastActive||0;
+        const users=data.users?Object.keys(data.users).length:0;
+        if(users===0 && (now-lastActive)>60000) db.ref('rooms/'+room.key).remove();
+      });
+    });
+  },60000);
+
+</script>
+</body>
+</html>

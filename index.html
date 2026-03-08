@@ -3,13 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Fixed Chat App</title>
+<title>Room Chat</title>
 <style>
   body { margin:0; font-family: Arial; background:#3498db; color:#fff; }
   #login, #chat, #admin { display:none; padding:20px; }
   input, button { padding:10px; margin:5px 0; border-radius:5px; border:none; }
   button { cursor:pointer; }
-  #messages { height:300px; overflow-y:scroll; border:1px solid #fff; padding:10px; background: rgba(255,255,255,0.1);}
+  #messages, #pmBox { height:200px; overflow-y:scroll; border:1px solid #fff; padding:10px; background: rgba(255,255,255,0.1); margin-bottom:10px; }
   #users { margin-bottom:10px; }
   .message { margin:5px 0; }
   .timestamp { font-size:0.7em; color:#ddd; }
@@ -20,38 +20,30 @@
 <div id="login">
   <h2>Login / Signup</h2>
   <input type="text" id="username" placeholder="Username"><br>
-  <input type="password" id="password" placeholder="Password"><br>
-  <button onclick="signup()">Sign Up</button>
-  <button onclick="login()">Login</button>
+  <button onclick="signup()">Sign Up / Login</button>
 </div>
 
 <div id="chat">
-  <h2>Chat Room</h2>
+  <h2>Rooms</h2>
   <input type="text" id="roomName" placeholder="Room name">
-  <button onclick="joinRoom()">Join / Create Room</button>
-  <div id="roomInfo"></div>
+  <button onclick="createOrJoinRoom()">Create / Join Room</button>
+  <div id="roomList"></div>
+  
+  <h3>Room Chat</h3>
+  <div id="currentRoom"></div>
   <div id="users"><b>Active Users:</b></div>
   <div id="messages"></div>
-  <input type="text" id="msgInput" placeholder="Type a message">
+  <input type="text" id="msgInput" placeholder="Type message">
   <button onclick="sendMessage()">Send</button>
-  <button onclick="logout()">Logout</button>
-  <button onclick="openAdmin()">Admin Panel</button>
 
-  <h3>Private Messages</h3>
+  <h3>Private Message</h3>
   <input type="text" id="pmRecipient" placeholder="Recipient username">
   <input type="text" id="pmInput" placeholder="Type PM">
   <button onclick="sendPM()">Send PM</button>
   <div id="pmBox"></div>
-</div>
 
-<div id="admin">
-  <h2>Admin Panel</h2>
-  <input type="text" id="banUser" placeholder="Username to ban">
-  <button onclick="banUser()">Ban</button><br>
-  <input type="text" id="kickUser" placeholder="Username to kick">
-  <button onclick="kickUser()">Kick</button><br>
-  <button onclick="deleteRoom()">Delete Room</button><br>
-  <button onclick="closeAdmin()">Close Admin</button>
+  <button onclick="logout()">Logout</button>
+  <button onclick="deleteRoom()">Delete Room</button>
 </div>
 
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
@@ -73,29 +65,21 @@ let currentUser = '';
 let currentRoom = '';
 let roomUsersRef = null;
 
-document.getElementById('login').style.display = 'block';
+document.getElementById('login').style.display='block';
 
-// Signup / Login
+// Signup/Login
 function signup(){
   const u = document.getElementById('username').value;
-  const p = document.getElementById('password').value;
-  if(!u||!p) return alert("Enter username & password");
+  if(!u) return alert("Enter username");
   localStorage.setItem('username', u);
-  localStorage.setItem('password', p);
   currentUser = u;
   showChat();
 }
-function login(){
-  const u = document.getElementById('username').value;
-  const p = document.getElementById('password').value;
-  if(localStorage.getItem('username')===u && localStorage.getItem('password')===p){
-    currentUser = u;
-    showChat();
-  } else alert("Wrong username/password");
-}
+
 function showChat(){
   document.getElementById('login').style.display='none';
   document.getElementById('chat').style.display='block';
+  loadRoomList();
 }
 
 // Logout
@@ -104,19 +88,41 @@ function logout(){
   location.reload();
 }
 
-// Join Room
-function joinRoom(){
-  currentRoom = document.getElementById('roomName').value.trim();
-  if(!currentRoom) return alert("Enter room name");
-
-  db.ref('banned/'+currentUser).get().then(s=>{
-    if(s.exists()) return alert("You are banned!");
-    setupRoom();
+// Load existing rooms
+function loadRoomList(){
+  db.ref('rooms').on('value', snap=>{
+    const listDiv = document.getElementById('roomList');
+    listDiv.innerHTML = '<b>Available Rooms:</b><br>';
+    snap.forEach(room=>{
+      const roomName = room.key;
+      const btn = document.createElement('button');
+      btn.innerText = 'Join ' + roomName;
+      btn.onclick = ()=>joinRoom(roomName);
+      listDiv.appendChild(btn);
+      listDiv.appendChild(document.createElement('br'));
+    });
   });
 }
-function setupRoom(){
-  const roomRef = db.ref('rooms/'+currentRoom);
-  roomRef.child('created').set(Date.now());
+
+// Create or Join Room
+function createOrJoinRoom(){
+  const roomName = document.getElementById('roomName').value.trim();
+  if(!roomName) return alert("Enter room name");
+  joinRoom(roomName);
+}
+
+// Join Room
+function joinRoom(roomName){
+  currentRoom = roomName;
+  document.getElementById('currentRoom').innerText = 'Room: ' + currentRoom;
+
+  const roomRef = db.ref('rooms/' + currentRoom);
+
+  // Set creator if room empty
+  roomRef.child('creator').get().then(snap=>{
+    if(!snap.exists()) roomRef.child('creator').set(currentUser);
+  });
+
   roomUsersRef = roomRef.child('users');
   roomUsersRef.child(currentUser).set(true);
   roomUsersRef.child(currentUser).onDisconnect().remove();
@@ -124,17 +130,13 @@ function setupRoom(){
   updateUsersList();
   loadMessages();
   loadPMs();
-  document.getElementById('roomInfo').innerText = 'Room created: '+new Date().toLocaleTimeString();
-
-  // Update lastActive
-  roomRef.child('lastActive').set(firebase.database.ServerValue.TIMESTAMP);
 }
 
-// Users list
+// Active Users
 function updateUsersList(){
   roomUsersRef.on('value', snap=>{
     const users = Object.keys(snap.val()||{});
-    document.getElementById('users').innerHTML='<b>Active Users:</b> '+users.join(', ');
+    document.getElementById('users').innerHTML = '<b>Active Users:</b> '+users.join(', ');
   });
 }
 
@@ -147,11 +149,10 @@ function sendMessage(){
     text,
     timestamp: Date.now()
   });
-  db.ref('rooms/'+currentRoom+'/lastActive').set(firebase.database.ServerValue.TIMESTAMP);
   document.getElementById('msgInput').value='';
 }
 
-// Load messages
+// Load Messages
 function loadMessages(){
   db.ref('rooms/'+currentRoom+'/messages').on('child_added', snap=>{
     const msg = snap.val();
@@ -164,11 +165,14 @@ function loadMessages(){
 
 // Private Messages
 function sendPM(){
-  const recipient = document.getElementById('pmRecipient').value;
+  const recipient = document.getElementById('pmRecipient').value.trim();
   const text = document.getElementById('pmInput').value;
-  if(!recipient||!text) return;
-  const pmId = recipient+'_'+currentUser;
-  db.ref('rooms/'+currentRoom+'/pm/'+pmId).push({from:currentUser, text, timestamp:Date.now()});
+  if(!recipient || !text) return;
+  db.ref('rooms/'+currentRoom+'/pm/'+recipient+'_'+currentUser).push({
+    from: currentUser,
+    text,
+    timestamp: Date.now()
+  });
   document.getElementById('pmInput').value='';
 }
 
@@ -186,43 +190,17 @@ function loadPMs(){
   });
 }
 
-// Admin
-function openAdmin(){document.getElementById('admin').style.display='block';}
-function closeAdmin(){document.getElementById('admin').style.display='none';}
-function banUser(){
-  const u = document.getElementById('banUser').value;
-  if(!u) return;
-  db.ref('banned/'+u).set(true);
-  db.ref('rooms/'+currentRoom+'/users/'+u).remove();
-  alert(u+' banned');
-}
-function kickUser(){
-  const u = document.getElementById('kickUser').value;
-  if(!u) return;
-  db.ref('rooms/'+currentRoom+'/users/'+u).remove();
-  alert(u+' kicked');
-}
+// Delete Room (only creator can delete)
 function deleteRoom(){
   if(!currentRoom) return;
-  db.ref('rooms/'+currentRoom).remove();
-  alert('Room deleted');
-  location.reload();
-}
-
-// Auto-delete empty rooms
-setInterval(()=>{
-  db.ref('rooms').get().then(snap=>{
-    const now = Date.now();
-    snap.forEach(room=>{
-      const data = room.val();
-      const lastActive = data.lastActive||0;
-      const users = data.users ? Object.keys(data.users).length : 0;
-      if(users===0 && (now-lastActive)>60000){
-        db.ref('rooms/'+room.key).remove();
-      }
-    });
+  db.ref('rooms/'+currentRoom+'/creator').get().then(snap=>{
+    if(snap.exists() && snap.val()===currentUser){
+      db.ref('rooms/'+currentRoom).remove();
+      alert('Room deleted');
+      location.reload();
+    } else alert('Only room creator can delete this room');
   });
-}, 60000);
+}
 </script>
 </body>
 </html>

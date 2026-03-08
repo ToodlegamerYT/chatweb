@@ -6,7 +6,7 @@
 <title>Room Chat</title>
 <style>
   body { margin:0; font-family: Arial; background:#3498db; color:#fff; }
-  #login, #chat, #admin { display:none; padding:20px; }
+  #login, #chat { display:none; padding:20px; }
   input, button { padding:10px; margin:5px 0; border-radius:5px; border:none; }
   button { cursor:pointer; }
   #messages, #pmBox { height:200px; overflow-y:scroll; border:1px solid #fff; padding:10px; background: rgba(255,255,255,0.1); margin-bottom:10px; }
@@ -65,14 +65,14 @@ let currentUser = '';
 let currentRoom = '';
 let roomUsersRef = null;
 
+// LOGIN
 document.getElementById('login').style.display='block';
 
-// Signup/Login
 function signup(){
-  const u = document.getElementById('username').value;
+  const u = document.getElementById('username').value.trim();
   if(!u) return alert("Enter username");
-  localStorage.setItem('username', u);
   currentUser = u;
+  localStorage.setItem('username', u);
   showChat();
 }
 
@@ -82,13 +82,13 @@ function showChat(){
   loadRoomList();
 }
 
-// Logout
+// LOGOUT
 function logout(){
   if(currentRoom && roomUsersRef) roomUsersRef.child(currentUser).remove();
   location.reload();
 }
 
-// Load existing rooms
+// LOAD ROOM LIST
 function loadRoomList(){
   db.ref('rooms').on('value', snap=>{
     const listDiv = document.getElementById('roomList');
@@ -104,25 +104,31 @@ function loadRoomList(){
   });
 }
 
-// Create or Join Room
+// CREATE OR JOIN ROOM
 function createOrJoinRoom(){
   const roomName = document.getElementById('roomName').value.trim();
   if(!roomName) return alert("Enter room name");
   joinRoom(roomName);
 }
 
-// Join Room
+// JOIN ROOM
 function joinRoom(roomName){
   currentRoom = roomName;
   document.getElementById('currentRoom').innerText = 'Room: ' + currentRoom;
 
-  const roomRef = db.ref('rooms/' + currentRoom);
+  const roomRef = db.ref('rooms/'+currentRoom);
 
   // Set creator if room empty
   roomRef.child('creator').get().then(snap=>{
     if(!snap.exists()) roomRef.child('creator').set(currentUser);
   });
 
+  // RESET listeners to avoid duplicates
+  if(roomUsersRef) roomUsersRef.off();
+  db.ref('rooms/'+currentRoom+'/messages').off();
+  db.ref('rooms/'+currentRoom+'/pm').off();
+
+  // JOIN room
   roomUsersRef = roomRef.child('users');
   roomUsersRef.child(currentUser).set(true);
   roomUsersRef.child(currentUser).onDisconnect().remove();
@@ -132,7 +138,7 @@ function joinRoom(roomName){
   loadPMs();
 }
 
-// Active Users
+// UPDATE USERS
 function updateUsersList(){
   roomUsersRef.on('value', snap=>{
     const users = Object.keys(snap.val()||{});
@@ -140,9 +146,9 @@ function updateUsersList(){
   });
 }
 
-// Send Message
+// SEND MESSAGE
 function sendMessage(){
-  const text = document.getElementById('msgInput').value;
+  const text = document.getElementById('msgInput').value.trim();
   if(!text || !currentRoom) return;
   db.ref('rooms/'+currentRoom+'/messages').push({
     user: currentUser,
@@ -152,9 +158,10 @@ function sendMessage(){
   document.getElementById('msgInput').value='';
 }
 
-// Load Messages
+// LOAD MESSAGES
 function loadMessages(){
-  db.ref('rooms/'+currentRoom+'/messages').on('child_added', snap=>{
+  const messagesRef = db.ref('rooms/'+currentRoom+'/messages');
+  messagesRef.on('child_added', snap=>{
     const msg = snap.val();
     const msgDiv = document.getElementById('messages');
     msgDiv.innerHTML += '<div class="message"><b>'+msg.user+'</b>: '+msg.text+
@@ -163,12 +170,13 @@ function loadMessages(){
   });
 }
 
-// Private Messages
+// SEND PM
 function sendPM(){
   const recipient = document.getElementById('pmRecipient').value.trim();
-  const text = document.getElementById('pmInput').value;
+  const text = document.getElementById('pmInput').value.trim();
   if(!recipient || !text) return;
-  db.ref('rooms/'+currentRoom+'/pm/'+recipient+'_'+currentUser).push({
+  const pmId = recipient+'_'+currentUser;
+  db.ref('rooms/'+currentRoom+'/pm/'+pmId).push({
     from: currentUser,
     text,
     timestamp: Date.now()
@@ -176,8 +184,10 @@ function sendPM(){
   document.getElementById('pmInput').value='';
 }
 
+// LOAD PM
 function loadPMs(){
-  db.ref('rooms/'+currentRoom+'/pm').on('child_added', snap=>{
+  const pmRef = db.ref('rooms/'+currentRoom+'/pm');
+  pmRef.on('child_added', snap=>{
     const pmBox = document.getElementById('pmBox');
     snap.forEach(pm=>{
       const val = pm.val();
@@ -190,15 +200,15 @@ function loadPMs(){
   });
 }
 
-// Delete Room (only creator can delete)
+// DELETE ROOM (only creator)
 function deleteRoom(){
-  if(!currentRoom) return;
-  db.ref('rooms/'+currentRoom+'/creator').get().then(snap=>{
+  const roomRef = db.ref('rooms/'+currentRoom);
+  roomRef.child('creator').get().then(snap=>{
     if(snap.exists() && snap.val()===currentUser){
-      db.ref('rooms/'+currentRoom).remove();
+      roomRef.remove();
       alert('Room deleted');
       location.reload();
-    } else alert('Only room creator can delete this room');
+    } else alert('Only creator can delete room');
   });
 }
 </script>
